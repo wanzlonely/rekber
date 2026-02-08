@@ -1,227 +1,176 @@
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf')
+const Database = require('better-sqlite3')
+const axios = require('axios')
 
-const BOT_TOKEN = '8316748932:AAEiCsi8Ko0hyhW6WYSe-ANDW1K40aFZR2Y';
-const OWNER_ID = 8062935882; 
-const STORE_NAME = 'WALZY REKBER STORE';
-const ADMIN_USERNAME = 'WalzyExploit';
+const BOT_TOKEN = '8316748932:AAEiCsi8Ko0hyhW6WYSe-ANDW1K40aFZR2Y'
+const OWNER_ID = 8062935882
+const STORE_NAME = 'WALZY REKBER STORE'
+const ADMIN_USERNAME = 'WalzyExploit'
 
-const QRIS_IMAGE = 'https://i.postimg.cc/SKvzQmpc/QRIS.png';
-const BANNER_IMAGE = 'https://i.postimg.cc/8C0rkTVz/1766936441710.png';
+const QRIS_IMAGE = 'https://i.postimg.cc/SKvzQmpc/QRIS.png'
+const BANNER_IMAGE = 'https://i.postimg.cc/8C0rkTVz/1766936441710.png'
 
 const PAYMENT_DATA = {
-    dana: "0822-9890-2274",
-    gopay: "0822-9890-2274",
-    seabank: "901984771499",
-    shopeepay: "0822-9890-2274",
-    holder_name: " HARxxxnto"
-};
+    dana:'082298902274',
+    gopay:'082298902274',
+    seabank:'901984771499',
+    shopeepay:'082298902274',
+    holder_name:'HARxxxnto'
+}
 
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(BOT_TOKEN)
+const db = new Database('rekber.db')
 
-const formatRp = (angka) => 'Rp ' + Number(angka).toLocaleString('id-ID');
+db.exec(`
+CREATE TABLE IF NOT EXISTS invoices (
+ id TEXT PRIMARY KEY,
+ buyer INTEGER,
+ chat INTEGER,
+ nominal INTEGER,
+ fee INTEGER,
+ total INTEGER,
+ status TEXT,
+ message INTEGER,
+ created INTEGER
+);
+`)
 
-const hitungFee = (nominal) => {
-    if (nominal <= 5000) return 1000;
-    if (nominal <= 10000) return 2000;
-    if (nominal <= 20000) return 3000;
-    if (nominal <= 50000) return 5000;
-    if (nominal <= 100000) return 8000;
-    return 10000;
-};
+const esc = t=>t.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g,'\\$1')
+const rp = n=>'Rp '+Number(n).toLocaleString('id-ID')
+const mask = n=>n.replace(/(\d{3,4})\d+(\d{3,4})/,'$1****$2')
+const fee = n=>n<=50000?15000:n<=99000?20000:n<=150000?25000:30000
+const invID = ()=>'INV-'+Date.now().toString(36).toUpperCase()
+const isGroup = ctx=>['group','supergroup'].includes(ctx.chat?.type)
+const isOwner = ctx=>ctx.from?.id===OWNER_ID
 
-const isOwner = (ctx) => ctx.from && ctx.from.id === OWNER_ID;
+const menu = async(ctx,edit=false)=>{
+ if(!isGroup(ctx))return
+ const text=esc(`
+━━━━━━━━━━━━━━━━━━━━━━
+${STORE_NAME}
+━━━━━━━━━━━━━━━━━━━━━━
 
-const showMainMenu = async (ctx, isEdit = false) => {
-    const message = `
-━━━ ❖ 𝗢𝗙𝗙𝗜𝗖𝗜𝗔𝗟 𝗥𝗘𝗞𝗕𝗘𝗥 ❖ ━━━
-✨ **${STORE_NAME}** ✨
-━━━━━━━━━━━━━━━━━━━━━━━━
+🔐 Aman
+📦 Otomatis
+🌐 Real-Time
+`.trim())
+ const kb=Markup.inlineKeyboard([
+  [Markup.button.callback('🧾 Buat Invoice','ask')],
+  [Markup.button.callback('📊 Riwayat','history')],
+  [Markup.button.url('🧑‍💻 Admin',`https://t.me/${ADMIN_USERNAME}`)]
+ ])
+ if(edit){
+  try{await ctx.editMessageMedia({type:'photo',media:BANNER_IMAGE,caption:text},{parse_mode:'MarkdownV2',...kb})}
+  catch{await ctx.replyWithPhoto(BANNER_IMAGE,{caption:text,parse_mode:'MarkdownV2',...kb})}
+ }else{
+  await ctx.replyWithPhoto(BANNER_IMAGE,{caption:text,parse_mode:'MarkdownV2',...kb})
+ }
+}
 
-Halo, ${ctx.from.first_name}! 👋
-Selamat datang di layanan Jasa Rekber **Walzy Exploit**.
+bot.start(ctx=>menu(ctx))
+bot.action('main',ctx=>menu(ctx,true))
 
-💰 **RATE CARD (BIAYA ADMIN):**
-• 1k - 5k   : ${formatRp(1000)}
-• 6k - 10k  : ${formatRp(2000)}
-• 11k - 20k : ${formatRp(3000)}
-• 21k - 50k : ${formatRp(5000)}
-• 50k++     : ${formatRp(10000)}
+bot.action('ask',async ctx=>{
+ if(!isGroup(ctx))return
+ const active=db.prepare('SELECT id FROM invoices WHERE buyer=? AND chat=? AND status=?')
+ .get(ctx.from.id,ctx.chat.id,'MENUNGGU TRANSFER')
+ if(active)return ctx.answerCbQuery('Masih ada invoice aktif',{show_alert:true})
+ await ctx.deleteMessage().catch(()=>{})
+ await ctx.reply(esc('Masukkan nominal'),{parse_mode:'MarkdownV2',reply_markup:{force_reply:true}})
+})
 
-👇 **KLIK TOMBOL DI BAWAH UNTUK TRANSAKSI:**
-`;
+bot.on('text',async ctx=>{
+ if(!isGroup(ctx))return
+ if(ctx.message.text.startsWith('/')||ctx.message.text.startsWith('.'))return
+ const nominal=parseInt(ctx.message.text.replace(/\D/g,''))
+ if(isNaN(nominal)||nominal<1000)return
+ const f=fee(nominal)
+ const total=nominal+f
+ const id=invID()
+ const text=esc(`
+━━━━━━━━━━━━━━━━━━━━━━
+🧾 INVOICE ${id}
+━━━━━━━━━━━━━━━━━━━━━━
 
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💸 Mulai Transaksi (Hitung Fee)', 'ask_nominal')],
-        [Markup.button.callback('🏧 Cek List Rekening', 'payment_list')],
-        [Markup.button.callback('📜 Aturan', 'rules_menu')],
-        [Markup.button.url('💬 Chat Admin', `https://t.me/${ADMIN_USERNAME}`)]
-    ]);
+Status : ⏳ MENUNGGU TRANSFER
 
-    if (isEdit) {
-        try {
-            await ctx.editMessageMedia({ type: 'photo', media: BANNER_IMAGE, caption: message, parse_mode: 'Markdown' }, keyboard);
-        } catch (e) {
-            await ctx.replyWithPhoto(BANNER_IMAGE, { caption: message, parse_mode: 'Markdown', ...keyboard });
-        }
-    } else {
-        await ctx.replyWithPhoto(BANNER_IMAGE, { caption: message, parse_mode: 'Markdown', ...keyboard });
-    }
-};
+Harga : ${rp(nominal)}
+Fee   : ${rp(f)}
+━━━━━━
+Total : ${rp(total)}
 
-bot.start((ctx) => showMainMenu(ctx, false));
-bot.action('main_menu', (ctx) => showMainMenu(ctx, true));
+DANA      : ${mask(PAYMENT_DATA.dana)}
+GOPAY     : ${mask(PAYMENT_DATA.gopay)}
+SEABANK   : ${mask(PAYMENT_DATA.seabank)}
+SHOPEEPAY : ${mask(PAYMENT_DATA.shopeepay)}
 
-bot.action('ask_nominal', async (ctx) => {
-    await ctx.deleteMessage();
-    const message = `
-🔢 **MASUKKAN HARGA BARANG**
-━━━━━━━━━━━━━━━━━━━━━━━━
+A/N : ${PAYMENT_DATA.holder_name}
+`.trim())
 
-Silakan balas pesan ini dengan mengetik **HARGA BARANG** (Nominal) saja.
-Bot akan otomatis menghitung Fee Admin.
+ const msg=await ctx.replyWithPhoto(QRIS_IMAGE,{
+  caption:text,
+  parse_mode:'MarkdownV2',
+  ...Markup.inlineKeyboard([
+   [Markup.button.callback('👁 Nomor Lengkap',`show_${id}`)],
+   [Markup.button.callback('🏠 Menu','main')]
+  ])
+ })
 
-📝 **Contoh:**
-Ketik: \`50000\`
-Ketik: \`15000\`
+ db.prepare('INSERT INTO invoices VALUES (?,?,?,?,?,?,?,?,?)')
+ .run(id,ctx.from.id,ctx.chat.id,nominal,f,total,'MENUNGGU TRANSFER',msg.message_id,Date.now())
 
-👇 *Silakan ketik angkanya sekarang...*
-`;
-    await ctx.reply(message, { parse_mode: 'Markdown' });
-});
+ axios.post('http://localhost:3000/update',{id}).catch(()=>{})
 
-bot.on('text', async (ctx) => {
-    const text = ctx.message.text;
+ bot.telegram.sendMessage(ctx.from.id,esc(`Invoice ${id}\nTotal ${rp(total)}`),{parse_mode:'MarkdownV2'}).catch(()=>{})
 
-    if (text.startsWith('.') || text.startsWith('/')) return;
+ setTimeout(async()=>{
+  const inv=db.prepare('SELECT * FROM invoices WHERE id=?').get(id)
+  if(!inv||inv.status!=='MENUNGGU TRANSFER')return
+  db.prepare('UPDATE invoices SET status=? WHERE id=?').run('DIBATALKAN OTOMATIS',id)
+  await bot.telegram.editMessageCaption(inv.chat,inv.message,null,
+   esc(`INVOICE ${id}\nStatus : DIBATALKAN`),{parse_mode:'MarkdownV2'}).catch(()=>{})
+  axios.post('http://localhost:3000/update',{id}).catch(()=>{})
+ },600000)
+})
 
-    const cleanNumber = parseInt(text.replace(/[^0-9]/g, ''));
+bot.on('photo',async ctx=>{
+ if(!isGroup(ctx))return
+ const inv=db.prepare('SELECT * FROM invoices WHERE buyer=? AND chat=? AND status=?')
+ .get(ctx.from.id,ctx.chat.id,'MENUNGGU TRANSFER')
+ if(!inv)return
+ db.prepare('UPDATE invoices SET status=? WHERE id=?').run('BUKTI DIKIRIM',inv.id)
+ await bot.telegram.editMessageCaption(inv.chat,inv.message,null,
+  esc(`INVOICE ${inv.id}\nStatus : BUKTI DIKIRIM`),{parse_mode:'MarkdownV2'}).catch(()=>{})
+ bot.telegram.sendMessage(inv.buyer,esc(`Bukti diterima\nInvoice ${inv.id}`),{parse_mode:'MarkdownV2'}).catch(()=>{})
+ axios.post('http://localhost:3000/update',{id:inv.id}).catch(()=>{})
+})
 
-    if (isNaN(cleanNumber) || cleanNumber < 1000) return;
+bot.action(/show_(.+)/,async ctx=>{
+ const id=ctx.match[1]
+ const inv=db.prepare('SELECT * FROM invoices WHERE id=?').get(id)
+ if(!inv||inv.buyer!==ctx.from.id)return ctx.answerCbQuery('Akses ditolak',{show_alert:true})
+ const sent=await ctx.reply(esc(`
+DANA      : ${PAYMENT_DATA.dana}
+GOPAY     : ${PAYMENT_DATA.gopay}
+SEABANK   : ${PAYMENT_DATA.seabank}
+SHOPEEPAY : ${PAYMENT_DATA.shopeepay}
+A/N : ${PAYMENT_DATA.holder_name}
+`),{parse_mode:'MarkdownV2'})
+ setTimeout(()=>ctx.deleteMessage(sent.message_id).catch(()=>{}),30000)
+})
 
-    const fee = hitungFee(cleanNumber);
-    const total = cleanNumber + fee;
+bot.hears(/^\.ok (INV-.+)/i,ctx=>{
+ if(!isOwner(ctx))return
+ const id=ctx.match[1]
+ const inv=db.prepare('SELECT * FROM invoices WHERE id=?').get(id)
+ if(!inv)return
+ db.prepare('UPDATE invoices SET status=? WHERE id=?').run('DANA AMAN',id)
+ bot.telegram.editMessageCaption(inv.chat,inv.message,null,
+  esc(`INVOICE ${id}\nStatus : DANA AMAN`),{parse_mode:'MarkdownV2'}).catch(()=>{})
+ bot.telegram.sendMessage(inv.buyer,esc(`Invoice ${id}\nDana aman`),{parse_mode:'MarkdownV2'}).catch(()=>{})
+ axios.post('http://localhost:3000/update',{id}).catch(()=>{})
+})
 
-    const message = `
-💳 **TAGIHAN PEMBAYARAN**
-━━━━━━━━━━━━━━━━━━━━━━━━
-Dihitung otomatis oleh System:
-
-💵 **Harga Barang:** ${formatRp(cleanNumber)}
-⚙️ **Biaya Admin:** ${formatRp(fee)}
-━━━━━━━━━━━━━━━━━━━━━━━━
-💰 **TOTAL TRANSFER: ${formatRp(total)}**
-
-Silakan transfer **PAS** (${formatRp(total)}) ke:
-
-💠 **SCAN QRIS (ALL E-WALLET):**
-*(Gambar di atas)*
-
-💠 **MANUAL TRANSFER:**
-🏦 **DANA:** \`${PAYMENT_DATA.dana}\`
-🏦 **GOPAY:** \`${PAYMENT_DATA.gopay}\`
-🏦 **SEABANK:** \`${PAYMENT_DATA.seabank}\`
-👤 **A/N:** \`${PAYMENT_DATA.holder_name}\`
-
-⚠️ *Kirim bukti transfer sekarang agar diproses!*
-`;
-
-    await ctx.replyWithPhoto(QRIS_IMAGE, {
-        caption: message,
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-             [Markup.button.callback('🔙 Hitung Ulang', 'ask_nominal')],
-             [Markup.button.callback('🏠 Menu Utama', 'main_menu')]
-        ])
-    });
-});
-
-bot.action('payment_list', async (ctx) => {
-    const message = `
-🏧 **LIST REKENING RESMI**
-━━━━━━━━━━━━━━━━━━━━━━━━
-Hanya transfer ke nomor berikut:
-
-🏦 **DANA**
-\`${PAYMENT_DATA.dana}\`
-
-🏦 **GOPAY**
-\`${PAYMENT_DATA.gopay}\`
-
-🏦 **SEABANK**
-\`${PAYMENT_DATA.seabank}\`
-
-🏦 **SHOPEEPAY**
-\`${PAYMENT_DATA.shopeepay}\`
-
-👤 **A/N:** \`${PAYMENT_DATA.holder_name}\`
-`;
-    await ctx.editMessageMedia({ type: 'photo', media: QRIS_IMAGE, caption: message, parse_mode: 'Markdown' }, 
-        Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'main_menu')]])
-    );
-});
-
-bot.action('rules_menu', async (ctx) => {
-    const message = `
-📜 **ATURAN TRANSAKSI**
-━━━━━━━━━━━━━━━━━━━━━━━━
-1. Buat grup dengan Admin.
-2. Klik tombol "Mulai Transaksi" di Bot.
-3. Masukkan harga barang.
-4. Transfer sesuai Total.
-5. Tunggu konfirmasi Admin.
-`;
-    await ctx.editMessageCaption(message, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'main_menu')]]) });
-});
-
-bot.hears(/^\.d/i, (ctx) => {
-    if (!isOwner(ctx)) return;
-
-    const message = `
-✅ **DANA SUDAH DIAMANKAN**
-━━━━━━━━━━━━━━━━━━━━━━━━
-👤 **Status:** Pembayaran Buyer Terverifikasi Valid
-💰 **Keterangan:** Dana telah masuk ke rekening Admin.
-
-📢 **INSTRUKSI SELANJUTNYA:**
-
-1️⃣ **UNTUK SELLER:**
-Silakan segera kirimkan Data/Barang/Akun kepada Buyer sekarang juga.
-*Wajib kirim bukti pengiriman di grup ini.*
-
-2️⃣ **UNTUK BUYER:**
-Silakan tunggu Seller mengirimkan pesanan. Segera cek dan amankan data jika sudah diterima.
-
-⚠️ *Transaksi sedang berlangsung. Dilarang menghapus chat!*
-━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 *System by ${STORE_NAME}*
-`;
-    ctx.reply(message, { parse_mode: 'Markdown' });
-});
-
-bot.hears(/^\.pay/i, (ctx) => {
-    if (!isOwner(ctx)) return;
-
-    const message = `
-🎉 **TRANSAKSI SUKSES (DONE)**
-━━━━━━━━━━━━━━━━━━━━━━━━
-✅ **Status:** Barang Diterima & Sesuai
-💸 **Tahap:** Pencairan Dana ke Seller
-
-Kepada **Seller**, silakan balas pesan ini dengan format pencairan dana:
-
-📝 **FORMAT CAIR:**
-\`Bank/E-wallet :\`
-\`Nomor Rekening:\`
-\`Atas Nama     :\`
-
-⏳ *Dana akan diproses Admin segera setelah data diterima.*
-
-Terima kasih sudah menggunakan jasa **${STORE_NAME}**! 🤝
-━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    ctx.reply(message, { parse_mode: 'Markdown' });
-});
-
-bot.launch().then(() => console.log('Bot Rekber Started'));
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+bot.launch()
+process.once('SIGINT',()=>bot.stop())
+process.once('SIGTERM',()=>bot.stop())
